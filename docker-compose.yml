@@ -1,0 +1,42 @@
+version: '3.8'
+
+services:
+  # 1. CSDL MySQL
+  mysql_db:
+    image: mysql:8.0
+    container_name: tinhoc_mysql
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: 123456
+      MYSQL_DATABASE: tinhoc_education_db
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+
+  # 2. Redis Cache & Celery Broker (Dành cho xử lý tác vụ ngầm)
+  redis:
+    image: redis:7-alpine
+    container_name: tinhoc_redis
+    ports:
+      - "6379:6379"
+
+  # 3. Backend FastAPI
+  backend:
+    build: ./backend
+    container_name: tinhoc_backend
+    restart: always
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    volumes:
+      - ./backend:/app
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=mysql+aiomysql://root:123456@mysql_db:3306/tinhoc_education_db
+    depends_on:
+      - mysql_db
+      - redis
+
+volumes:
+  mysql_data:
+

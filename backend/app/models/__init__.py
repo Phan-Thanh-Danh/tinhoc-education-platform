@@ -2,21 +2,79 @@
 from __future__ import annotations
 
 from .base import AuditMixin, Base, TimestampMixin, UUIDPrimaryKeyMixin
-from .curriculum import Grade, Lesson, LessonContent, Topic, TrackType
+from .curriculum import (
+    Grade,
+    Lesson,
+    LessonAttachment,
+    LessonContent,
+    LessonProgressStatus,
+    MiniQuizAnswer,
+    MiniQuizQuestion,
+    Topic,
+    TrackType,
+    UserLessonProgress,
+)
+from .document import (
+    ContributorPointsHistory,
+    DocumentCategory,
+    DocumentDownloadLog,
+    DocumentModerationLog,
+    DocumentRating,
+    DocumentStatus,
+    DocumentTrack,
+    ModerationDecision,
+    PointTransactionType,
+    SharedDocument,
+)
 from .exam import (
     Exam,
     ExamQuestion,
     ExamQuestionType,
+    ExamRoomParticipant,
     ExamSubmission,
     ExamSubmissionAnswer,
     ExamTrack,
     ExamType,
+    RoomStatus,
     SubmissionStatus,
     UserWrongQuestion,
+    VirtualExamRoom,
+)
+from .flashcard import (
+    DeckTrack,
+    Flashcard,
+    FlashcardDeck,
+    GlossaryTerm,
+    GlossaryTrack,
+    TermType,
+    UserCardReview,
+    UserTermBookmark,
+)
+from .forum import (
+    ForumAnswer,
+    ForumAnswerStatus,
+    ForumCategory,
+    ForumComment,
+    ForumPost,
+    ForumPostStatus,
+    ForumPostTag,
+    ForumPostTrack,
+    ForumTag,
+    ForumVote,
+    ForumVoteTargetType,
+)
+from .platform import (
+    AuditLog,
+    Notification,
+    NotificationType,
+    ReportStatus,
+    ReportTargetType,
+    SystemReport,
 )
 from .question import (
     DifficultyLevel,
     Question,
+    QuestionAuditLog,
     QuestionStatus,
     QuestionTag,
     QuestionTagMapping,
@@ -40,7 +98,7 @@ __all__ = [
     "TimestampMixin",
     "UUIDPrimaryKeyMixin",
     "AuditMixin",
-    # User & Auth
+    # User & Auth (Bảng 1-5)
     "User",
     "Role",
     "UserRole",
@@ -49,29 +107,76 @@ __all__ = [
     "TrackPreference",
     "UserStatus",
     "VerificationCodeType",
-    # Curriculum
+    # Curriculum (Bảng 6-9, 17-20)
     "Grade",
     "Topic",
     "Lesson",
     "LessonContent",
+    "LessonAttachment",
+    "MiniQuizQuestion",
+    "MiniQuizAnswer",
+    "UserLessonProgress",
     "TrackType",
-    # Question Bank
+    "LessonProgressStatus",
+    # Question Bank (Bảng 10-12, 43)
     "Question",
     "QuestionTag",
     "QuestionTagMapping",
+    "QuestionAuditLog",
     "QuestionType",
     "QuestionTrack",
     "DifficultyLevel",
     "QuestionStatus",
-    # Exam & Submissions
+    # Exam & Virtual Room (Bảng 13-16, 21, 39, 40)
     "Exam",
     "ExamQuestion",
     "ExamSubmission",
     "ExamSubmissionAnswer",
     "UserWrongQuestion",
+    "VirtualExamRoom",
+    "ExamRoomParticipant",
     "ExamTrack",
     "ExamType",
     "SubmissionStatus",
     "ExamQuestionType",
+    "RoomStatus",
+    # Glossary & Flashcard (Bảng 22-26)
+    "GlossaryTerm",
+    "UserTermBookmark",
+    "FlashcardDeck",
+    "Flashcard",
+    "UserCardReview",
+    "GlossaryTrack",
+    "TermType",
+    "DeckTrack",
+    # Forum (Bảng 27-33)
+    "ForumCategory",
+    "ForumPost",
+    "ForumAnswer",
+    "ForumComment",
+    "ForumVote",
+    "ForumTag",
+    "ForumPostTag",
+    "ForumPostTrack",
+    "ForumPostStatus",
+    "ForumAnswerStatus",
+    "ForumVoteTargetType",
+    # Document & Points History (Bảng 34-38, 41)
+    "DocumentCategory",
+    "SharedDocument",
+    "DocumentModerationLog",
+    "DocumentRating",
+    "ContributorPointsHistory",
+    "DocumentDownloadLog",
+    "DocumentTrack",
+    "DocumentStatus",
+    "ModerationDecision",
+    "PointTransactionType",
+    # Platform Operations (Bảng 42, 44, 45)
+    "SystemReport",
+    "Notification",
+    "AuditLog",
+    "ReportTargetType",
+    "ReportStatus",
+    "NotificationType",
 ]
-

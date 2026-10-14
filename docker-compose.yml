@@ -1,7 +1,5 @@
-version: '3.8'
-
 services:
-  # 1. CSDL MySQL
+  # 1. Cơ sở dữ liệu MySQL 8.0
   mysql_db:
     image: mysql:8.0
     container_name: tinhoc_mysql
@@ -10,20 +8,33 @@ services:
       MYSQL_ROOT_PASSWORD: 123456
       MYSQL_DATABASE: tinhoc_education_db
     ports:
-      - "3306:3306"
+      - "3307:3306"
     volumes:
       - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p123456"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
-  # 2. Redis Cache & Celery Broker (Dành cho xử lý tác vụ ngầm)
+  # 2. Redis Cache & Broker
   redis:
     image: redis:7-alpine
     container_name: tinhoc_redis
+    restart: always
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
-  # 3. Backend FastAPI
+  # 3. Backend FastAPI (Python)
   backend:
-    build: ./backend
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
     container_name: tinhoc_backend
     restart: always
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
@@ -33,10 +44,31 @@ services:
       - "8000:8000"
     environment:
       - DATABASE_URL=mysql+aiomysql://root:123456@mysql_db:3306/tinhoc_education_db
+      - REDIS_URL=redis://redis:6379/0
+      - PYTHONUNBUFFERED=1
     depends_on:
-      - mysql_db
-      - redis
+      mysql_db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # 4. Frontend Vue 3 + Vite
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: tinhoc_frontend
+    restart: always
+    command: npm run dev
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_BASE_URL=http://localhost:8000/api/v1
+    depends_on:
+      - backend
 
 volumes:
   mysql_data:
-

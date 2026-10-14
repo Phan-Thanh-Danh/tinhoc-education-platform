@@ -1,0 +1,15 @@
+venv/
+__pycache__/
+app/__pycache__/
+app/**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+storage/contributions/*
+!storage/contributions/.gitkeep
+.vscode/
+.DS_Store
+*.log
+tests/
+

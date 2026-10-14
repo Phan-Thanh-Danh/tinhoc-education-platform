@@ -116,9 +116,10 @@ docker compose ps
 ```
 
 Khi chạy thành công:
-- **Backend API:** [http://localhost:8000](http://localhost:8000)
+- **Frontend App (Vue 3 + Vite):** [http://localhost:5173](http://localhost:5173)
+- **Backend API (FastAPI):** [http://localhost:8000](http://localhost:8000)
 - **Swagger API Docs:** [http://localhost:8000/docs](http://localhost:8000/docs)
-- **MySQL Database:** `localhost:3306` (Database: `tinhoc_education_db`)
+- **MySQL Database:** `localhost:3307` (Database: `tinhoc_education_db`, User: `root`, Password: `123456`)
 - **Redis Server:** `localhost:6379`
 
 Dừng cụm container:

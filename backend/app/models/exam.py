@@ -46,6 +46,12 @@ class SubmissionStatus(str, enum.Enum):
     Cancelled = "Cancelled"
 
 
+class RoomStatus(str, enum.Enum):
+    Scheduled = "Scheduled"
+    Opening = "Opening"
+    Closed = "Closed"
+
+
 class ExamQuestionType(str, enum.Enum):
     MULTIPLE_CHOICE = "MULTIPLE_CHOICE"
     TRUE_FALSE = "TRUE_FALSE"
@@ -137,6 +143,10 @@ class Exam(Base):
     )
     submissions: Mapped[List[ExamSubmission]] = relationship(
         "ExamSubmission",
+        back_populates="exam",
+    )
+    virtual_rooms: Mapped[List[VirtualExamRoom]] = relationship(
+        "VirtualExamRoom",
         back_populates="exam",
     )
 
@@ -308,6 +318,11 @@ class ExamSubmission(Base):
         "UserWrongQuestion",
         back_populates="last_submission",
     )
+    room_participant: Mapped[Optional[ExamRoomParticipant]] = relationship(
+        "ExamRoomParticipant",
+        back_populates="submission",
+        uselist=False,
+    )
 
 
 class ExamSubmissionAnswer(Base):
@@ -457,5 +472,133 @@ class UserWrongQuestion(Base):
         "ExamSubmission",
         back_populates="wrong_questions",
         foreign_keys=[last_submission_id],
+    )
+
+
+class VirtualExamRoom(Base):
+    __tablename__ = "virtual_exam_rooms"
+    __table_args__ = (
+        CheckConstraint("close_time > open_time", name="ck_rooms_time"),
+        {
+            "mysql_engine": "InnoDB",
+            "mysql_charset": "utf8mb4",
+            "mysql_collate": "utf8mb4_0900_ai_ci",
+        },
+    )
+
+    id: Mapped[str] = mapped_column(
+        CHAR(36),
+        primary_key=True,
+        default=lambda: str(uuid.uuid4()),
+    )
+    exam_id: Mapped[str] = mapped_column(
+        CHAR(36),
+        ForeignKey("exams.id", ondelete="RESTRICT", name="fk_rooms_exam"),
+        nullable=False,
+    )
+    room_name: Mapped[str] = mapped_column(
+        VARCHAR(200),
+        nullable=False,
+    )
+    open_time: Mapped[datetime] = mapped_column(
+        DATETIME,
+        nullable=False,
+    )
+    close_time: Mapped[datetime] = mapped_column(
+        DATETIME,
+        nullable=False,
+    )
+    status: Mapped[RoomStatus] = mapped_column(
+        ENUM("Scheduled", "Opening", "Closed", name="room_status_enum"),
+        nullable=False,
+        default=RoomStatus.Scheduled,
+    )
+    is_leaderboard_public: Mapped[bool] = mapped_column(
+        TINYINT(1),
+        nullable=False,
+        default=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DATETIME,
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    exam: Mapped[Exam] = relationship(
+        "Exam",
+        back_populates="virtual_rooms",
+        foreign_keys=[exam_id],
+    )
+    participants: Mapped[List[ExamRoomParticipant]] = relationship(
+        "ExamRoomParticipant",
+        back_populates="room",
+        cascade="all, delete-orphan",
+    )
+
+
+class ExamRoomParticipant(Base):
+    __tablename__ = "exam_room_participants"
+    __table_args__ = (
+        UniqueConstraint("room_id", "user_id", name="uq_room_user"),
+        Index("idx_room_leaderboard", "room_id", "final_score", "completion_time_seconds"),
+        {
+            "mysql_engine": "InnoDB",
+            "mysql_charset": "utf8mb4",
+            "mysql_collate": "utf8mb4_0900_ai_ci",
+        },
+    )
+
+    id: Mapped[int] = mapped_column(
+        BigInteger,
+        primary_key=True,
+        autoincrement=True,
+    )
+    room_id: Mapped[str] = mapped_column(
+        CHAR(36),
+        ForeignKey("virtual_exam_rooms.id", ondelete="CASCADE", name="fk_participants_room"),
+        nullable=False,
+    )
+    user_id: Mapped[str] = mapped_column(
+        CHAR(36),
+        ForeignKey("users.id", ondelete="CASCADE", name="fk_participants_user"),
+        nullable=False,
+    )
+    submission_id: Mapped[str | None] = mapped_column(
+        CHAR(36),
+        ForeignKey("exam_submissions.id", ondelete="SET NULL", name="fk_participants_sub"),
+        nullable=True,
+        default=None,
+    )
+    final_score: Mapped[Decimal | None] = mapped_column(
+        DECIMAL(4, 2),
+        nullable=True,
+        default=None,
+    )
+    completion_time_seconds: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+        default=None,
+    )
+    leaderboard_rank: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+        default=None,
+        comment="Cập nhật tự động sau khi phòng thi đóng hoặc khi nộp bài",
+    )
+
+    room: Mapped[VirtualExamRoom] = relationship(
+        "VirtualExamRoom",
+        back_populates="participants",
+        foreign_keys=[room_id],
+    )
+    user: Mapped[User] = relationship(
+        "User",
+        back_populates="room_participations",
+        foreign_keys=[user_id],
+    )
+    submission: Mapped[Optional[ExamSubmission]] = relationship(
+        "ExamSubmission",
+        back_populates="room_participant",
+        foreign_keys=[submission_id],
     )
 

@@ -1,0 +1,9 @@
+node_modules/
+dist/
+-ErrorAction/
+SilentlyContinue/
+.vscode/
+.DS_Store
+*.log
+.env.local
+

@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from sqlalchemy import (
+    BigInteger,
     CheckConstraint,
     ForeignKey,
     ForeignKeyConstraint,
@@ -205,6 +206,10 @@ class Question(Base, TimestampMixin):
         back_populates="question",
         cascade="all, delete-orphan",
     )
+    audit_logs: Mapped[List[QuestionAuditLog]] = relationship(
+        "QuestionAuditLog",
+        back_populates="question",
+    )
 
 
 class QuestionTag(Base):
@@ -280,4 +285,63 @@ class QuestionTagMapping(Base):
         "QuestionTag",
         back_populates="tag_mappings",
     )
+
+
+class QuestionAuditLog(Base):
+    __tablename__ = "question_audit_logs"
+    __table_args__ = (
+        Index("idx_qal_question", "question_id", "version"),
+        {
+            "mysql_engine": "InnoDB",
+            "mysql_charset": "utf8mb4",
+            "mysql_collate": "utf8mb4_0900_ai_ci",
+        },
+    )
+
+    id: Mapped[int] = mapped_column(
+        BigInteger,
+        primary_key=True,
+        autoincrement=True,
+    )
+    question_id: Mapped[str] = mapped_column(
+        CHAR(36),
+        ForeignKey("questions.id", ondelete="RESTRICT", name="fk_qal_question"),
+        nullable=False,
+    )
+    version: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+    old_content_payload: Mapped[Dict[str, Any]] = mapped_column(
+        JSON,
+        nullable=False,
+    )
+    old_solution_payload: Mapped[Dict[str, Any]] = mapped_column(
+        JSON,
+        nullable=False,
+    )
+    change_reason: Mapped[str] = mapped_column(
+        VARCHAR(255),
+        nullable=False,
+    )
+    changed_by: Mapped[str] = mapped_column(
+        CHAR(36),
+        ForeignKey("users.id", ondelete="RESTRICT", name="fk_qal_editor"),
+        nullable=False,
+    )
+    changed_at: Mapped[datetime] = mapped_column(
+        DATETIME,
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    question: Mapped[Question] = relationship(
+        "Question",
+        back_populates="audit_logs",
+    )
+    editor: Mapped[User] = relationship(
+        "User",
+        foreign_keys=[changed_by],
+    )
+
 

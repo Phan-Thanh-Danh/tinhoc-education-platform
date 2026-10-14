@@ -24,7 +24,7 @@ from .base import Base, TimestampMixin
 
 if TYPE_CHECKING:
     from .curriculum import Lesson, LessonContent
-    from .exam import Exam, ExamSubmission, UserWrongQuestion
+    from .exam import Exam, ExamRoomParticipant, ExamSubmission, UserWrongQuestion
     from .question import Question
 
 
@@ -205,6 +205,12 @@ class User(Base, TimestampMixin):
         back_populates="user",
         cascade="all, delete-orphan",
         foreign_keys="[UserWrongQuestion.user_id]",
+    )
+    room_participations: Mapped[List[ExamRoomParticipant]] = relationship(
+        "ExamRoomParticipant",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        foreign_keys="[ExamRoomParticipant.user_id]",
     )
 
 

@@ -1,7 +1,8 @@
 # --- Python / Backend ---
 backend/venv/
-backend/__pycache__/
-backend/app/__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
 backend/.env
 backend/storage/contributions/*
 !backend/storage/contributions/.gitkeep

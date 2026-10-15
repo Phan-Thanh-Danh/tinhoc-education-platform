@@ -189,3 +189,4 @@ class ComprehensiveAuditLogMiddleware(BaseHTTPMiddleware):
                 user_agent=user_agent,
                 details=audit_details,
             )
+

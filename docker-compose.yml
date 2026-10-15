@@ -46,6 +46,8 @@ services:
       - DATABASE_URL=mysql+aiomysql://root:123456@mysql_db:3306/tinhoc_education_db
       - REDIS_URL=redis://redis:6379/0
       - PYTHONUNBUFFERED=1
+      - BEHIND_PROXY=true
+      - TRUSTED_PROXIES=127.0.0.1,::1,localhost,172.16.0.0/12,10.0.0.0/8
     depends_on:
       mysql_db:
         condition: service_healthy
@@ -66,9 +68,24 @@ services:
     ports:
       - "5173:5173"
     environment:
-      - VITE_API_BASE_URL=http://localhost:8000/api/v1
+      - VITE_API_BASE_URL=/api/v1
     depends_on:
       - backend
+
+  # 5. Nginx Reverse Proxy (Cổng giao tiếp HTTPS chuẩn Production)
+  nginx:
+    image: nginx:alpine
+    container_name: tinhoc_nginx
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+    depends_on:
+      - backend
+      - frontend
 
 volumes:
   mysql_data:

@@ -19,3 +19,9 @@ Thumbs.db
 .vscode/
 *.log
 
+# --- SSL / Nginx Certificates ---
+nginx/certs/*.pem
+nginx/certs/*.key
+nginx/certs/*.crt
+!nginx/certs/.gitkeep
+

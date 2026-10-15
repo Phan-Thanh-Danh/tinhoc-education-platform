@@ -45,22 +45,38 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
         )
 
-        # 7. Content Security Policy (CSP) cho phép KaTeX, PrismJS và API nội bộ
-        csp_policy = (
-            "default-src 'self'; "
-            "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
-            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-            "font-src 'self' data: https://fonts.gstatic.com; "
-            "img-src 'self' data: blob: https:; "
-            "connect-src 'self' http://localhost:8000 http://localhost:5173 ws:; "
-            "frame-ancestors 'none'; "
-            "base-uri 'self'; "
-            "form-action 'self';"
-        )
+        # 7. Content Security Policy (CSP)
+        is_prod = settings.ENVIRONMENT.lower() == "production"
+        docs_paths = {"/docs", "/redoc", "/openapi.json"}
+
+        if request.url.path in docs_paths:
+            # Cho phép Swagger UI và Redoc tải thư viện CSS/JS từ CDN jsdelivr và render API docs bình thường
+            csp_policy = (
+                "default-src 'self'; "
+                "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net; "
+                "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; "
+                "font-src 'self' data: https://fonts.gstatic.com; "
+                "img-src 'self' data: blob: https: https://fastapi.tiangolo.com; "
+                "connect-src 'self' *; "
+                "frame-ancestors 'none';"
+            )
+        else:
+            connect_src = "'self'" if is_prod else "'self' http://localhost:8000 http://localhost:5173 ws:"
+            csp_policy = (
+                "default-src 'self'; "
+                "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+                "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+                "font-src 'self' data: https://fonts.gstatic.com; "
+                "img-src 'self' data: blob: https:; "
+                f"connect-src {connect_src}; "
+                "frame-ancestors 'none'; "
+                "base-uri 'self'; "
+                "form-action 'self';"
+            )
         response.headers["Content-Security-Policy"] = csp_policy
 
         # 8. Bắt buộc kết nối HTTPS với HSTS nếu chạy trên môi trường Production
-        if settings.ENVIRONMENT.lower() == "production":
+        if is_prod:
             response.headers["Strict-Transport-Security"] = (
                 "max-age=31536000; includeSubDomains; preload"
             )

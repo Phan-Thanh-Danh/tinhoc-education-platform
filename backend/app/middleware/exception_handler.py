@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Any
+from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
@@ -19,13 +19,15 @@ def format_error_response(
     error_type: str,
     message: str,
     details: Any = None,
+    correlation_id: Optional[str] = None,
 ) -> JSONResponse:
     """Định dạng cấu trúc phản hồi lỗi chuẩn hóa cho toàn bộ hệ thống API."""
+    cid = correlation_id or get_correlation_id()
     content: dict[str, Any] = {
         "success": False,
         "error": error_type,
         "message": message,
-        "correlation_id": get_correlation_id(),
+        "correlation_id": cid,
         "timestamp": datetime.utcnow().isoformat() + "Z",
     }
     if details is not None:
@@ -54,9 +56,10 @@ def register_exception_handlers(app: FastAPI) -> None:
         # Chuẩn hóa thông báo lỗi dạng string
         message = exc.detail if isinstance(exc.detail, str) else "Yêu cầu không thể thực hiện."
         details = exc.detail if not isinstance(exc.detail, str) else None
+        cid = get_correlation_id(request)
 
         logger.warning(
-            f"[{get_correlation_id()}] HTTP {exc.status_code} trên {request.method} {request.url.path}: {message}"
+            f"[{cid}] HTTP {exc.status_code} trên {request.method} {request.url.path}: {message}"
         )
 
         # Tự động ghi nhận các hành vi truy cập trái phép (403 Forbidden / IDOR violation) vào Bảng 45
@@ -72,9 +75,10 @@ def register_exception_handlers(app: FastAPI) -> None:
                     "path": request.url.path,
                     "method": request.method,
                     "detail": message,
+                    "correlation_id": cid,
                 },
             )
-        return format_error_response(exc.status_code, error_type, message, details)
+        return format_error_response(exc.status_code, error_type, message, details, correlation_id=cid)
 
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(
@@ -99,8 +103,9 @@ def register_exception_handlers(app: FastAPI) -> None:
 
             friendly_errors.append({"field": field, "message": msg, "type": err_type})
 
+        cid = get_correlation_id(request)
         logger.info(
-            f"[{get_correlation_id()}] Lỗi xác thực dữ liệu trên {request.method} {request.url.path}: {friendly_errors}"
+            f"[{cid}] Lỗi xác thực dữ liệu trên {request.method} {request.url.path}: {friendly_errors}"
         )
 
         return format_error_response(
@@ -108,6 +113,7 @@ def register_exception_handlers(app: FastAPI) -> None:
             error_type="ValidationError",
             message="Dữ liệu gửi lên không đúng định dạng. Vui lòng kiểm tra lại các trường thông tin.",
             details=friendly_errors,
+            correlation_id=cid,
         )
 
     @app.exception_handler(Exception)
@@ -118,8 +124,9 @@ def register_exception_handlers(app: FastAPI) -> None:
         Bắt toàn bộ các lỗi ngoại lệ chưa được xử lý (Unhandled 500).
         Bảo vệ an ninh tuyệt đối: Ghi đầy đủ Stack Trace vào Server Log nhưng
         KHÔNG BAO GIỜ để lộ Stack Trace ra ngoài Client.
+        Đảm bảo trích xuất đúng correlation_id từ request.state kể cả khi contextvars đã reset.
         """
-        correlation_id = get_correlation_id()
+        correlation_id = get_correlation_id(request)
         logger.critical(
             f"[{correlation_id}] Lỗi nghiêm trọng chưa xử lý trên {request.method} {request.url.path}: {exc}",
             exc_info=True,
@@ -130,5 +137,6 @@ def register_exception_handlers(app: FastAPI) -> None:
             error_type="InternalServerError",
             message="Đã xảy ra sự cố nội bộ trên máy chủ. Vui lòng liên hệ ban quản trị kèm theo mã hỗ trợ này.",
             details={"support_id": correlation_id},
+            correlation_id=correlation_id,
         )
 

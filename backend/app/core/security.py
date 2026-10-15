@@ -136,3 +136,4 @@ def decode_jwt_token(token: str) -> Dict[str, Any]:
         settings.SECRET_KEY,
         algorithms=[settings.ALGORITHM],
     )
+

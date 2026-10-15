@@ -21,9 +21,19 @@ logger = logging.getLogger("middleware.correlation")
 CORRELATION_ID_REGEX = re.compile(r"^[a-zA-Z0-9\-_]{1,64}$")
 
 
-def get_correlation_id() -> str:
-    """Lấy correlation_id của request hiện tại trong ngữ cảnh thực thi."""
-    return correlation_id_ctx.get()
+def get_correlation_id(request: Optional[Request] = None) -> str:
+    """
+    Lấy correlation_id của request hiện tại trong ngữ cảnh thực thi:
+    - Đọc từ ContextVar (xuyên suốt các tầng Service, Repository, Logger).
+    - Dự phòng đọc từ request.state.correlation_id khi ContextVar bị reset (ví dụ khi văng ngoại lệ 500
+      ra ngoài ServerErrorMiddleware).
+    """
+    cid = correlation_id_ctx.get()
+    if cid:
+        return cid
+    if request is not None and hasattr(request, "state"):
+        return getattr(request.state, "correlation_id", "") or ""
+    return ""
 
 
 class CorrelationIdMiddleware(BaseHTTPMiddleware):

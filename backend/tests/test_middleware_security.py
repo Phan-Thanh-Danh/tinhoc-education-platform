@@ -128,14 +128,25 @@ while isinstance(cur, dict) and "next" in cur:
 assert found_exceeded, "Deep recursion limit failed!"
 print("PASSED: mask_sensitive_data max recursion depth limit protected against Stack Overflow DoS.")
 
+# Test PostgreSQL Null-byte (\x00) sanitation
+null_payload = {"user\x00name": "Danh\x00Leader", "note": "Safe\x00Text"}
+null_cleaned = mask_sensitive_data(null_payload)
+assert "\x00" not in str(null_cleaned), "Null-byte was not stripped!"
+assert null_cleaned["username"] == "DanhLeader"
+assert null_cleaned["note"] == "SafeText"
+print("PASSED: Null-bytes (\\x00) stripped completely for PostgreSQL JSONB safety.")
+
 print("\n--- 2. Testing Anti-IP Spoofing (get_client_ip) ---")
 class MockRequest:
     def __init__(self, host, headers):
         class Client:
             pass
+        class State:
+            pass
         self.client = Client()
         self.client.host = host
         self.headers = headers
+        self.state = State()
 
 # Case A: Attacker directly connects from untrusted IP with forged CF-Connecting-IP
 attacker_req = MockRequest("203.0.113.5", {
@@ -173,6 +184,24 @@ ip_cf = get_client_ip(cf_req)
 assert ip_cf == "198.51.100.77", f"CF-Connecting-IP not honored with USE_CLOUDFLARE=True! Got: {ip_cf}"
 settings.USE_CLOUDFLARE = False
 print(f"PASSED: Cloudflare header honored when USE_CLOUDFLARE=True: {ip_cf}.")
+
+# B4: Fallback step 4 removed: When USE_CLOUDFLARE=False and no X-Real-IP or X-Forwarded-For, fake CF header must NOT be trusted
+fake_cf_only = MockRequest("127.0.0.1", {
+    "cf-connecting-ip": "1.2.3.4",
+})
+ip_fake_cf = get_client_ip(fake_cf_only)
+assert ip_fake_cf == "127.0.0.1", f"Fake CF header was trusted without USE_CLOUDFLARE! Got: {ip_fake_cf}"
+print(f"PASSED: Fake CF header rejected when USE_CLOUDFLARE=False (fallback step 4 safely removed).")
+
+# B5: JWT length limit & JWT bomb protection test
+from app.middleware.rate_limit import extract_user_id_from_request
+from app.middleware.audit import extract_user_info_from_token
+bomb_token = "Bearer " + ("A" * 3000)
+bomb_req = MockRequest("127.0.0.1", {"authorization": bomb_token})
+assert extract_user_id_from_request(bomb_req) is None
+uid, uname = extract_user_info_from_token(bomb_req)
+assert uid is None
+print("PASSED: Oversized JWT bomb (> 2048 chars) rejected before HMAC decoding.")
 
 print("\n--- 3. Testing In-Memory LRU Cache Eviction & Cleanup ---")
 from app.middleware.rate_limit import _cleanup_memory_cache, _memory_rate_cache, _memory_breached_keys, MAX_MEMORY_CACHE_KEYS
@@ -230,13 +259,15 @@ async def run_async_tests():
     assert "cdn.jsdelivr.net" in csp, f"CDN not permitted in docs CSP: {csp}"
     print("PASSED: /docs CSP allows CDN resources.")
 
-    # Test 4.2: API CSP & Correlation-ID header
+    # Test 4.2: API CSP, Modern Security Headers & Correlation-ID header
     api_resp = await call_asgi(app, "GET", "/api/v1/test", headers={"X-Correlation-ID": "test-req-12345"})
     assert api_resp.status_code == 200
     assert api_resp.headers.get("x-correlation-id") == "test-req-12345"
     assert "x-process-time" in api_resp.headers
+    assert api_resp.headers.get("x-xss-protection") == "0", f"Expected X-XSS-Protection=0, got {api_resp.headers.get('x-xss-protection')}"
+    assert api_resp.headers.get("cross-origin-opener-policy") == "same-origin", f"Expected COOP=same-origin, got {api_resp.headers.get('cross-origin-opener-policy')}"
     assert api_resp.json()["correlation_id"] == "test-req-12345"
-    print("PASSED: API endpoint returned correlation_id and process time.")
+    print("PASSED: API endpoint returned modern OWASP headers (X-XSS-Protection=0, COOP=same-origin) & correlation_id.")
 
     # Test 4.3: Unhandled 500 Exception handler preserves correlation_id & ISO 8601 UTC timestamp
     err_resp = await call_asgi(app, "GET", "/api/v1/unhandled_error", headers={"X-Correlation-ID": "err-corr-999"})

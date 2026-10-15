@@ -87,40 +87,42 @@ def get_client_ip(request: Request) -> str:
         if parts:
             return parts[-1]
 
-    # 4. Fallback cuối: CF-Connecting-IP nếu không có các header trên
-    cf_ip = request.headers.get("cf-connecting-ip")
-    if cf_ip:
-        return cf_ip.strip()
-
     return direct_ip
 
 
 def extract_user_id_from_request(request: Request) -> Optional[str]:
     """
     Trích xuất an toàn user_id từ request.state hoặc giải mã nhanh từ Authorization Bearer Token.
-    Giải quyết triệt để điểm mù thứ tự thực thi giữa Middleware và Authentication Dependency.
+    Giải quyết triệt để điểm mù thứ tự thực thi giữa Middleware và Authentication Dependency:
+    - Giới hạn độ dài token (10 < len < 2048) để chống tấn công CPU Exhaustion / JWT bomb.
+    - Bắt buộc kiểm tra hạn dùng (verify_exp=True) để ngăn kẻ tấn công dùng token cũ đã lộ làm ô nhiễm rate limit.
     """
     # 1. Nếu route đã chạy qua Auth Dependency
-    if hasattr(request.state, "user_id") and request.state.user_id:
-        return str(request.state.user_id)
-    if hasattr(request.state, "user") and request.state.user:
-        return getattr(request.state.user, "id", None)
+    if hasattr(request, "state"):
+        if hasattr(request.state, "user_id") and request.state.user_id:
+            return str(request.state.user_id)
+        if hasattr(request.state, "user") and request.state.user:
+            return getattr(request.state.user, "id", None)
 
     # 2. Giải mã token nhanh từ header nếu có
     auth_header = request.headers.get("Authorization")
     if auth_header and auth_header.startswith("Bearer "):
         token = auth_header[7:].strip()
-        try:
-            from jose import jwt
-            payload = jwt.decode(
-                token,
-                settings.SECRET_KEY,
-                algorithms=[settings.ALGORITHM],
-                options={"verify_exp": False},
-            )
-            return payload.get("sub")
-        except Exception:
-            pass
+        if 10 < len(token) < 2048:
+            try:
+                try:
+                    import jwt
+                except ImportError:
+                    from jose import jwt
+                payload = jwt.decode(
+                    token,
+                    settings.SECRET_KEY,
+                    algorithms=[settings.ALGORITHM],
+                    options={"verify_exp": True},  # Bắt buộc token còn hạn mới áp rate limit theo user
+                )
+                return payload.get("sub")
+            except Exception:
+                pass
 
     return None
 
@@ -298,7 +300,7 @@ def rate_limit(
                     action=AuditAction.SECURITY_RATE_LIMIT_EXCEEDED,
                     user_id=user_id,
                     ip_address=client_ip,
-                    user_agent=request.headers.get("user-agent"),
+                    user_agent=(request.headers.get("user-agent") or "")[:512] or None,
                     details={
                         "path": request.url.path,
                         "method": request.method,
@@ -354,7 +356,7 @@ class GlobalRateLimitMiddleware(BaseHTTPMiddleware):
                     action=AuditAction.SECURITY_RATE_LIMIT_EXCEEDED,
                     user_id=extract_user_id_from_request(request),
                     ip_address=client_ip,
-                    user_agent=request.headers.get("user-agent"),
+                    user_agent=(request.headers.get("user-agent") or "")[:512] or None,
                     details={
                         "type": "global_rate_limit",
                         "path": request.url.path,

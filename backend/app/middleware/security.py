@@ -34,18 +34,21 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         # 3. Ngăn trình duyệt tự ý đoán định dạng tệp tin (MIME Sniffing)
         response.headers["X-Content-Type-Options"] = "nosniff"
 
-        # 4. Bật bộ lọc XSS trên các trình duyệt thế hệ cũ
-        response.headers["X-XSS-Protection"] = "1; mode=block"
+        # 4. Tắt bộ lọc XSS lỗi thời của trình duyệt (theo chuẩn OWASP 2025/2026 chống lỗ hổng XS-Search)
+        response.headers["X-XSS-Protection"] = "0"
 
-        # 5. Kiểm soát thông tin Referrer để bảo vệ quyền riêng tư
+        # 5. Ngăn rò rỉ cửa sổ và tài nguyên chéo nguồn (Cross-Origin Opener Policy)
+        response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+
+        # 6. Kiểm soát thông tin Referrer để bảo vệ quyền riêng tư
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
 
-        # 6. Giới hạn quyền truy cập phần cứng nhạy cảm (Microphone, Camera, Vị trí)
+        # 7. Giới hạn quyền truy cập phần cứng nhạy cảm (Microphone, Camera, Vị trí)
         response.headers["Permissions-Policy"] = (
             "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
         )
 
-        # 7. Content Security Policy (CSP)
+        # 8. Content Security Policy (CSP)
         is_prod = settings.ENVIRONMENT.lower() == "production"
         docs_paths = {"/docs", "/redoc", "/openapi.json"}
 

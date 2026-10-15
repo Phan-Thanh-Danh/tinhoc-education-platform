@@ -51,8 +51,9 @@ def is_sensitive_key(key: Any) -> bool:
 def mask_sensitive_data(data: Any, max_depth: int = 10, current_depth: int = 0) -> Any:
     """
     Đệ quy duyệt qua Dictionary / List và che giấu các thông tin nhạy cảm
-    như mật khẩu, mã OTP, Token bí mật trước khi lưu vào bảng CSDL audit_logs.
-    Giới hạn độ sâu tối đa (max_depth=10) để chống Stack Overflow DoS từ payload lồng nhau.
+    như mật khẩu, mã OTP, Token bí mật trước khi lưu vào bảng CSDL audit_logs:
+    - Giới hạn độ sâu tối đa (max_depth=10) để chống Stack Overflow DoS từ payload lồng nhau.
+    - Lọc bỏ triệt để ký tự Null-byte (\x00) để chống lỗi UntranslatableCharacterError trong PostgreSQL JSONB.
     """
     if current_depth > max_depth:
         return "***MAX_DEPTH_EXCEEDED***"
@@ -60,10 +61,11 @@ def mask_sensitive_data(data: Any, max_depth: int = 10, current_depth: int = 0) 
     if isinstance(data, dict):
         masked_dict = {}
         for key, value in data.items():
-            if is_sensitive_key(key):
-                masked_dict[key] = "***REDACTED***"
+            clean_key = str(key).replace("\x00", "")
+            if is_sensitive_key(clean_key):
+                masked_dict[clean_key] = "***REDACTED***"
             else:
-                masked_dict[key] = mask_sensitive_data(
+                masked_dict[clean_key] = mask_sensitive_data(
                     value, max_depth=max_depth, current_depth=current_depth + 1
                 )
         return masked_dict
@@ -72,6 +74,9 @@ def mask_sensitive_data(data: Any, max_depth: int = 10, current_depth: int = 0) 
             mask_sensitive_data(item, max_depth=max_depth, current_depth=current_depth + 1)
             for item in data
         ]
+    elif isinstance(data, str):
+        # Lọc sạch ký tự Null-byte (\x00) chống crash cơ chế lưu JSON/JSONB trên PostgreSQL
+        return data.replace("\x00", "")
     return data
 
 
@@ -82,43 +87,48 @@ def extract_user_info_from_token(request: Request) -> tuple[Optional[str], str]:
     Trả về: (user_id, user_name)
     """
     # 1. Kiểm tra nếu request.state đã được tầng Auth gán
-    if hasattr(request.state, "user") and request.state.user:
-        u = request.state.user
-        user_id = str(getattr(u, "id", "")) or None
-        user_name = (
-            getattr(u, "full_name", None)
-            or getattr(u, "username", None)
-            or getattr(u, "email", "Người dùng")
-        )
-        return user_id, str(user_name)
+    if hasattr(request, "state"):
+        if hasattr(request.state, "user") and request.state.user:
+            u = request.state.user
+            user_id = str(getattr(u, "id", "")) or None
+            user_name = (
+                getattr(u, "full_name", None)
+                or getattr(u, "username", None)
+                or getattr(u, "email", "Người dùng")
+            )
+            return user_id, str(user_name)
 
-    if hasattr(request.state, "user_id") and request.state.user_id:
-        return str(request.state.user_id), str(getattr(request.state, "user_name", "Người dùng"))
+        if hasattr(request.state, "user_id") and request.state.user_id:
+            return str(request.state.user_id), str(getattr(request.state, "user_name", "Người dùng"))
 
     # 2. Giải mã token nhanh từ Header Authorization nếu có
     auth_header = request.headers.get("Authorization")
     if auth_header and auth_header.startswith("Bearer "):
         token = auth_header[7:].strip()
-        try:
-            from jose import jwt
-            payload = jwt.decode(
-                token,
-                settings.SECRET_KEY,
-                algorithms=[settings.ALGORITHM],
-                options={"verify_exp": False},  # Vẫn trích xuất được danh tính kể cả token vừa hết hạn
-            )
-            user_id = payload.get("sub")
-            user_name = (
-                payload.get("name")
-                or payload.get("full_name")
-                or payload.get("username")
-                or payload.get("email")
-                or "Người dùng"
-            )
-            return str(user_id) if user_id else None, str(user_name)
-        except Exception:
-            # Token lỗi hoặc không hợp lệ -> Coi như khách
-            pass
+        if 10 < len(token) < 2048:  # Chặn JWT bomb gây tốn CPU khi băm HMAC
+            try:
+                try:
+                    import jwt
+                except ImportError:
+                    from jose import jwt
+                payload = jwt.decode(
+                    token,
+                    settings.SECRET_KEY,
+                    algorithms=[settings.ALGORITHM],
+                    options={"verify_exp": False},  # Vẫn trích xuất được danh tính kể cả token vừa hết hạn
+                )
+                user_id = payload.get("sub")
+                user_name = (
+                    payload.get("name")
+                    or payload.get("full_name")
+                    or payload.get("username")
+                    or payload.get("email")
+                    or "Người dùng"
+                )
+                return str(user_id) if user_id else None, str(user_name)
+            except Exception:
+                # Token lỗi hoặc không hợp lệ -> Coi như khách
+                pass
 
     return None, "Khách (Anonymous)"
 
@@ -155,7 +165,7 @@ class ComprehensiveAuditLogMiddleware(BaseHTTPMiddleware):
 
         start_time = time.perf_counter()
         client_ip = get_client_ip(request)
-        user_agent = request.headers.get("user-agent")
+        user_agent = (request.headers.get("user-agent") or "")[:512] or None
 
         # Xử lý Request Body an toàn chống OOM DoS & Stream Deadlock
         parsed_body: Any = None

@@ -58,6 +58,22 @@ def register_exception_handlers(app: FastAPI) -> None:
         logger.warning(
             f"[{get_correlation_id()}] HTTP {exc.status_code} trên {request.method} {request.url.path}: {message}"
         )
+
+        # Tự động ghi nhận các hành vi truy cập trái phép (403 Forbidden / IDOR violation) vào Bảng 45
+        if exc.status_code == status.HTTP_403_FORBIDDEN:
+            from app.middleware.rate_limit import get_client_ip
+            from app.services.audit import AuditAction, log_audit_background
+            log_audit_background(
+                action=AuditAction.SECURITY_UNAUTHORIZED_ACCESS,
+                user_id=getattr(request.state, "user_id", None),
+                ip_address=get_client_ip(request),
+                user_agent=request.headers.get("user-agent"),
+                details={
+                    "path": request.url.path,
+                    "method": request.method,
+                    "detail": message,
+                },
+            )
         return format_error_response(exc.status_code, error_type, message, details)
 
     @app.exception_handler(RequestValidationError)
@@ -115,3 +131,4 @@ def register_exception_handlers(app: FastAPI) -> None:
             message="Đã xảy ra sự cố nội bộ trên máy chủ. Vui lòng liên hệ ban quản trị kèm theo mã hỗ trợ này.",
             details={"support_id": correlation_id},
         )
+

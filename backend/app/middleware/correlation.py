@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 import uuid
 from contextvars import ContextVar
@@ -16,6 +17,9 @@ correlation_id_ctx: ContextVar[str] = ContextVar("correlation_id", default="")
 
 logger = logging.getLogger("middleware.correlation")
 
+# Regex chỉ chấp nhận các ký tự chữ, số, gạch ngang, gạch dưới (độ dài 1-64) để chống CRLF Log Injection
+CORRELATION_ID_REGEX = re.compile(r"^[a-zA-Z0-9\-_]{1,64}$")
+
 
 def get_correlation_id() -> str:
     """Lấy correlation_id của request hiện tại trong ngữ cảnh thực thi."""
@@ -26,18 +30,19 @@ class CorrelationIdMiddleware(BaseHTTPMiddleware):
     """
     Middleware gắn mã định danh tương quan (X-Correlation-ID) và đo lường thời gian xử lý:
     - Tiếp nhận hoặc tự động sinh UUID v4 cho mỗi request đến.
+    - Làm sạch và xác thực chuỗi ID chống tấn công Log Injection (CRLF).
     - Gắn Correlation-ID vào contextvars và request.state.
     - Trả về X-Correlation-ID và X-Process-Time trong Response Headers.
     - Ghi log có cấu trúc (Structured Logging) thời gian thực thi (Performance tracking).
     """
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
-        # Lấy Correlation ID từ header của client nếu có, nếu không thì tự sinh mới
-        req_correlation_id = (
-            request.headers.get("X-Correlation-ID")
-            or request.headers.get("X-Request-ID")
-            or str(uuid.uuid4())
-        )
+        # Lấy Correlation ID từ header của client nếu có, kiểm tra hợp lệ để chống Log Injection
+        raw_id = request.headers.get("X-Correlation-ID") or request.headers.get("X-Request-ID")
+        if raw_id and CORRELATION_ID_REGEX.match(raw_id):
+            req_correlation_id = raw_id
+        else:
+            req_correlation_id = str(uuid.uuid4())
 
         # Lưu vào contextvars và request.state
         token = correlation_id_ctx.set(req_correlation_id)
@@ -71,3 +76,4 @@ class CorrelationIdMiddleware(BaseHTTPMiddleware):
         )
 
         return response
+

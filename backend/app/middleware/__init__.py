@@ -5,7 +5,7 @@ from fastapi import FastAPI
 
 from .correlation import CorrelationIdMiddleware, get_correlation_id
 from .exception_handler import register_exception_handlers
-from .rate_limit import GlobalRateLimitMiddleware, rate_limit
+from .rate_limit import GlobalRateLimitMiddleware, get_client_ip, rate_limit
 from .security import SecurityHeadersMiddleware
 
 __all__ = [
@@ -13,6 +13,7 @@ __all__ = [
     "SecurityHeadersMiddleware",
     "GlobalRateLimitMiddleware",
     "get_correlation_id",
+    "get_client_ip",
     "rate_limit",
     "register_exception_handlers",
     "setup_middlewares",
@@ -37,3 +38,4 @@ def setup_middlewares(app: FastAPI) -> None:
 
     # 4. Gắn Correlation-ID và đo lường hiệu năng thời gian xử lý (Lớp ngoài cùng)
     app.add_middleware(CorrelationIdMiddleware)
+

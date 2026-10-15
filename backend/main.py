@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import get_db, init_db
+from app.middleware import setup_middlewares
 
 logging.basicConfig(
     level=logging.INFO,
@@ -45,6 +46,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Cài đặt các Middleware an ninh, Correlation ID, Rate Limit và Exception Handlers
+setup_middlewares(app)
 
 
 @app.get("/", tags=["Root"])

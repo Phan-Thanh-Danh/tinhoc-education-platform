@@ -16,3 +16,4 @@ openssl req -x509 -nodes -days "$DAYS" -newkey rsa:2048 \
     -addext "subjectAltName=DNS:$DOMAIN,IP:127.0.0.1"
 
 echo "Tạo chứng chỉ SSL thành công tại $CERTS_DIR!"
+

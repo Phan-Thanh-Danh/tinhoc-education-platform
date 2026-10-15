@@ -41,3 +41,4 @@ if (-not $opensslCmd) {
 Write-Host "Tạo chứng chỉ SSL thành công!" -ForegroundColor Green
 Write-Host "Cert: $certFile"
 Write-Host "Key:  $keyFile"
+

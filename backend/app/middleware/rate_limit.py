@@ -53,9 +53,12 @@ def is_trusted_proxy(ip_str: str) -> bool:
 def get_client_ip(request: Request) -> str:
     """
     Trích xuất IP thực tế có thẩm định Proxy tin cậy (Anti-IP Spoofing):
-    - Chỉ tin tưởng các Header `CF-Connecting-IP`, `X-Forwarded-For`, `X-Real-IP`
-      KHI VÀ CHỈ KHI kết nối trực tiếp đến từ Reverse Proxy tin cậy (Nginx, Docker Network, Cloudflare).
-    - Ngăn chặn hoàn toàn việc kẻ tấn công tự chế header IP giả mạo để bypass Rate Limit hoặc làm sai lệch Audit Log.
+    - Chỉ tin tưởng các Header proxy KHI VÀ CHỈ KHI kết nối trực tiếp đến từ Reverse Proxy tin cậy (Nginx, Cloudflare, v.v.).
+    - Thứ tự ưu tiên xác thực chặt chẽ:
+      1. X-Real-IP: Nginx luôn ghi đè giá trị $remote_addr vào header này, client không thể can thiệp.
+      2. CF-Connecting-IP: Chỉ tin tưởng khi cờ USE_CLOUDFLARE = True (tránh client tự bịa header khi chỉ qua Nginx thuần).
+      3. X-Forwarded-For: Khi Nginx cấu hình proxy_add_x_forwarded_for, IP thật được nối vào CUỐI chuỗi.
+         Duyệt ngược từ cuối danh sách (reversed) để lấy địa chỉ IP công khai đầu tiên không thuộc mạng TRUSTED_PROXIES.
     """
     direct_ip = request.client.host if request.client else "unknown"
 
@@ -63,22 +66,31 @@ def get_client_ip(request: Request) -> str:
     if not settings.BEHIND_PROXY or not is_trusted_proxy(direct_ip):
         return direct_ip
 
-    # Đọc từ Cloudflare Header nếu proxy tin cậy
-    cf_ip = request.headers.get("cf-connecting-ip")
-    if cf_ip:
-        return cf_ip.strip()
-
-    # Đọc từ X-Real-IP
+    # 1. Ưu tiên số 1: X-Real-IP (do Nginx ghi đè biến $remote_addr, an toàn tuyệt đối)
     real_ip = request.headers.get("x-real-ip")
     if real_ip:
         return real_ip.strip()
 
-    # Đọc từ X-Forwarded-For (lấy IP đầu tiên hợp lệ)
+    # 2. CF-Connecting-IP (chỉ khi có cấu hình sử dụng Cloudflare)
+    if getattr(settings, "USE_CLOUDFLARE", False):
+        cf_ip = request.headers.get("cf-connecting-ip")
+        if cf_ip:
+            return cf_ip.strip()
+
+    # 3. X-Forwarded-For: Duyệt ngược từ cuối chuỗi để tìm IP thật gần nhất (bỏ qua các IP giả client chèn ở đầu)
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
         parts = [p.strip() for p in forwarded.split(",") if p.strip()]
+        for ip in reversed(parts):
+            if not is_trusted_proxy(ip):
+                return ip
         if parts:
-            return parts[0]
+            return parts[-1]
+
+    # 4. Fallback cuối: CF-Connecting-IP nếu không có các header trên
+    cf_ip = request.headers.get("cf-connecting-ip")
+    if cf_ip:
+        return cf_ip.strip()
 
     return direct_ip
 
@@ -144,7 +156,7 @@ async def get_redis_client():
 
 def _cleanup_memory_cache(now: float, window_seconds: int) -> None:
     """Dọn dẹp bộ nhớ In-Memory khi đạt ngưỡng để chống cạn kiệt RAM (OOM DoS)."""
-    if len(_memory_rate_cache) < MAX_MEMORY_CACHE_KEYS:
+    if len(_memory_rate_cache) < MAX_MEMORY_CACHE_KEYS and len(_memory_breached_keys) < MAX_MEMORY_CACHE_KEYS:
         return
 
     # 1. Xóa các key có toàn bộ timestamp đã hết hạn
@@ -154,6 +166,7 @@ def _cleanup_memory_cache(now: float, window_seconds: int) -> None:
     ]
     for k in expired_keys:
         _memory_rate_cache.pop(k, None)
+        _memory_breached_keys.pop(k, None)
 
     # 2. Xóa các key vi phạm cũ
     expired_breaches = [
@@ -163,11 +176,17 @@ def _cleanup_memory_cache(now: float, window_seconds: int) -> None:
     for k in expired_breaches:
         _memory_breached_keys.pop(k, None)
 
-    # 3. Nếu vẫn đầy, cưỡng chế xóa bớt 20% key cũ nhất (LRU eviction)
+    # 3. Nếu vẫn đầy, cưỡng chế xóa bớt 20% key cũ nhất (LRU eviction) trên cả 2 dict
     if len(_memory_rate_cache) >= MAX_MEMORY_CACHE_KEYS:
         keys_to_remove = list(_memory_rate_cache.keys())[: int(MAX_MEMORY_CACHE_KEYS * 0.2)]
         for k in keys_to_remove:
             _memory_rate_cache.pop(k, None)
+            _memory_breached_keys.pop(k, None)
+
+    if len(_memory_breached_keys) >= MAX_MEMORY_CACHE_KEYS:
+        breach_keys_to_remove = list(_memory_breached_keys.keys())[: int(MAX_MEMORY_CACHE_KEYS * 0.2)]
+        for k in breach_keys_to_remove:
+            _memory_breached_keys.pop(k, None)
 
 
 async def check_rate_limit(

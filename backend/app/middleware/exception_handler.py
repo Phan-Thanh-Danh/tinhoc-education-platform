@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException, Request, status
@@ -28,7 +28,7 @@ def format_error_response(
         "error": error_type,
         "message": message,
         "correlation_id": cid,
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
     if details is not None:
         content["details"] = details

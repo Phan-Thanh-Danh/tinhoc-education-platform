@@ -25,6 +25,7 @@ class Settings(BaseSettings):
 
     # Proxy & Network Security
     BEHIND_PROXY: bool = os.getenv("BEHIND_PROXY", "true").lower() in ("true", "1", "yes")
+    USE_CLOUDFLARE: bool = os.getenv("USE_CLOUDFLARE", "false").lower() in ("true", "1", "yes")
     TRUSTED_PROXIES: str = os.getenv("TRUSTED_PROXIES", "127.0.0.1,::1,localhost,172.16.0.0/12,10.0.0.0/8")
 
     # Audit Log Configuration

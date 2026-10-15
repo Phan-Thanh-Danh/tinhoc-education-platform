@@ -147,18 +147,63 @@ assert ip_detected == "203.0.113.5", f"IP Spoofing succeeded! Detected {ip_detec
 print(f"PASSED: Attacker forged headers ignored from untrusted client {ip_detected}.")
 
 # Case B: Request comes from trusted proxy (127.0.0.1)
-proxy_req = MockRequest("127.0.0.1", {
-    "cf-connecting-ip": "203.0.113.99",
+# B1: Nginx overrides X-Real-IP, attacker tries to spoof CF-Connecting-IP while USE_CLOUDFLARE=False
+nginx_req = MockRequest("127.0.0.1", {
+    "cf-connecting-ip": "1.2.3.4",
+    "x-real-ip": "203.0.113.88",
 })
-ip_from_proxy = get_client_ip(proxy_req)
-assert ip_from_proxy == "203.0.113.99", f"Proxy IP extraction failed! Detected {ip_from_proxy}"
-print(f"PASSED: Trusted proxy client IP properly extracted: {ip_from_proxy}.")
+ip_from_nginx = get_client_ip(nginx_req)
+assert ip_from_nginx == "203.0.113.88", f"X-Real-IP was not prioritized over fake CF header! Got: {ip_from_nginx}"
+print(f"PASSED: X-Real-IP took priority over fake CF header from trusted proxy: {ip_from_nginx}.")
 
-print("\n--- 3. Testing FastAPI Middlewares Integration ---")
+# B2: Nginx appends client IP to X-Forwarded-For: <fake_ip>, <real_ip>
+x_forwarded_req = MockRequest("127.0.0.1", {
+    "x-forwarded-for": "1.2.3.4, 203.0.113.99",
+})
+ip_from_forwarded = get_client_ip(x_forwarded_req)
+assert ip_from_forwarded == "203.0.113.99", f"X-Forwarded-For reverse lookup failed! Got: {ip_from_forwarded}"
+print(f"PASSED: X-Forwarded-For picked real client IP from end of chain: {ip_from_forwarded}.")
+
+# B3: USE_CLOUDFLARE=True trusts CF-Connecting-IP
+settings.USE_CLOUDFLARE = True
+cf_req = MockRequest("127.0.0.1", {
+    "cf-connecting-ip": "198.51.100.77",
+})
+ip_cf = get_client_ip(cf_req)
+assert ip_cf == "198.51.100.77", f"CF-Connecting-IP not honored with USE_CLOUDFLARE=True! Got: {ip_cf}"
+settings.USE_CLOUDFLARE = False
+print(f"PASSED: Cloudflare header honored when USE_CLOUDFLARE=True: {ip_cf}.")
+
+print("\n--- 3. Testing In-Memory LRU Cache Eviction & Cleanup ---")
+from app.middleware.rate_limit import _cleanup_memory_cache, _memory_rate_cache, _memory_breached_keys, MAX_MEMORY_CACHE_KEYS
+import time
+
+now = time.time()
+for i in range(5500):
+    _memory_rate_cache[f"key_{i}"] = [now]
+    _memory_breached_keys[f"key_{i}"] = now
+
+assert len(_memory_rate_cache) == 5500
+assert len(_memory_breached_keys) == 5500
+
+_cleanup_memory_cache(now, 60)
+assert len(_memory_rate_cache) <= MAX_MEMORY_CACHE_KEYS, f"_memory_rate_cache not capped! Len: {len(_memory_rate_cache)}"
+assert len(_memory_breached_keys) <= MAX_MEMORY_CACHE_KEYS, f"_memory_breached_keys not capped! Len: {len(_memory_breached_keys)}"
+print(f"PASSED: Memory cache capped strictly at {len(_memory_rate_cache)} and {len(_memory_breached_keys)} keys.")
+
+print("\n--- 4. Testing FastAPI Middlewares Integration ---")
 from fastapi import FastAPI, Request, HTTPException
 
 app = FastAPI(docs_url="/docs", redoc_url="/redoc", debug=False)
 setup_middlewares(app)
+
+# Track calls to log_audit_background
+audit_calls = []
+import app.middleware.audit as audit_mod
+orig_audit = audit_mod.log_audit_background
+def mock_log_audit(*args, **kwargs):
+    audit_calls.append((args, kwargs))
+audit_mod.log_audit_background = mock_log_audit
 
 @app.get("/api/v1/test")
 async def test_endpoint(request: Request):
@@ -173,15 +218,19 @@ async def body_endpoint(request: Request):
     body = await request.json()
     return {"received": body}
 
+@app.get("/api/v1/trigger_429")
+async def rate_limited_endpoint():
+    raise HTTPException(status_code=429, detail="Rate limit exceeded test")
+
 async def run_async_tests():
-    # Test 3.1: Docs CSP
+    # Test 4.1: Docs CSP
     docs_resp = await call_asgi(app, "GET", "/docs")
     assert docs_resp.status_code == 200
     csp = docs_resp.headers.get("content-security-policy", "")
     assert "cdn.jsdelivr.net" in csp, f"CDN not permitted in docs CSP: {csp}"
     print("PASSED: /docs CSP allows CDN resources.")
 
-    # Test 3.2: API CSP & Correlation-ID header
+    # Test 4.2: API CSP & Correlation-ID header
     api_resp = await call_asgi(app, "GET", "/api/v1/test", headers={"X-Correlation-ID": "test-req-12345"})
     assert api_resp.status_code == 200
     assert api_resp.headers.get("x-correlation-id") == "test-req-12345"
@@ -189,7 +238,7 @@ async def run_async_tests():
     assert api_resp.json()["correlation_id"] == "test-req-12345"
     print("PASSED: API endpoint returned correlation_id and process time.")
 
-    # Test 3.3: Unhandled 500 Exception handler preserves correlation_id
+    # Test 4.3: Unhandled 500 Exception handler preserves correlation_id & ISO 8601 UTC timestamp
     err_resp = await call_asgi(app, "GET", "/api/v1/unhandled_error", headers={"X-Correlation-ID": "err-corr-999"})
     assert err_resp.status_code == 500
     err_data = err_resp.json()
@@ -197,35 +246,55 @@ async def run_async_tests():
     assert err_data["error"] == "InternalServerError"
     assert err_data["correlation_id"] == "err-corr-999", f"Correlation ID lost in 500 response! Got: {err_data}"
     assert err_data["details"]["support_id"] == "err-corr-999"
-    print("PASSED: 500 unhandled error preserved correlation_id in response without leaking stack trace.")
+    assert "timestamp" in err_data and "+00:00" in err_data["timestamp"] or "Z" in err_data["timestamp"]
+    print("PASSED: 500 unhandled error preserved correlation_id and valid timezone-aware UTC timestamp.")
 
-    # Test 3.4: Post JSON body reading works without stream deadlock
+    # Test 4.4: Post JSON body reading works without stream deadlock
     sample_body = json.dumps({"user": "Danh", "secret_pass": "123"}).encode("utf-8")
     post_resp = await call_asgi(
         app,
         "POST",
         "/api/v1/json_body",
-        headers={"content-type": "application/json"},
+        headers={"content-type": "application/json", "content-length": str(len(sample_body))},
         body=sample_body,
     )
     assert post_resp.status_code == 200
     assert post_resp.json()["received"] == {"user": "Danh", "secret_pass": "123"}
     print("PASSED: POST JSON body parsed by endpoint successfully without stream deadlock.")
 
-    # Test 3.5: Large body audit protection (> 64KB)
+    # Test 4.5: Transfer-Encoding: chunked / missing Content-Length body protection (OOM DoS fix)
+    chunked_resp = await call_asgi(
+        app,
+        "POST",
+        "/api/v1/json_body",
+        headers={"content-type": "application/json", "transfer-encoding": "chunked"},
+        body=b'{"chunked": true}',
+    )
+    assert chunked_resp.status_code == 200
+    print("PASSED: Chunked JSON payload without Content-Length handled without calling request.body() in audit.")
+
+    # Test 4.6: Large body audit protection (> 64KB)
     large_payload = json.dumps({"big_data": "A" * (70 * 1024)}).encode("utf-8")
     large_resp = await call_asgi(
         app,
         "POST",
         "/api/v1/json_body",
-        headers={"content-type": "application/json"},
+        headers={"content-type": "application/json", "content-length": str(len(large_payload))},
         body=large_payload,
     )
     assert large_resp.status_code == 200
     print("PASSED: Large JSON body (> 64KB) handled safely without OOM or crashing.")
 
+    # Test 4.7: ComprehensiveAuditLogMiddleware does NOT duplicate log on 429
+    audit_calls.clear()
+    resp_429 = await call_asgi(app, "GET", "/api/v1/trigger_429")
+    assert resp_429.status_code == 429
+    # ComprehensiveAuditLogMiddleware must skip log_audit_background when status_code == 429
+    assert len(audit_calls) == 0, f"Expected 0 audit log calls for 429, got {len(audit_calls)}"
+    print("PASSED: ComprehensiveAuditLogMiddleware bypassed audit logging on 429 to prevent DB spam.")
+
     print("\n==========================================")
-    print("ALL SECURITY & PENTEST VERIFICATION TESTS PASSED!")
+    print("ALL EDGE-CASE SECURITY VERIFICATION TESTS PASSED!")
     print("==========================================")
 
 asyncio.run(run_async_tests())

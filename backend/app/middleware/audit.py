@@ -182,7 +182,7 @@ class ComprehensiveAuditLogMiddleware(BaseHTTPMiddleware):
                         "notice": f"Payload vượt quá ngưỡng cho phép ({content_length} bytes > {max_size} bytes), bỏ qua chi tiết",
                         "size_bytes": content_length,
                     }
-                else:
+                elif 0 < content_length <= max_size:
                     try:
                         # Starlette tự động lưu cache body vào request._body
                         # Các endpoint phía sau có thể gọi request.body() / request.json() bình thường
@@ -204,6 +204,10 @@ class ComprehensiveAuditLogMiddleware(BaseHTTPMiddleware):
                                 }
                     except Exception as exc:
                         parsed_body = {"body_read_error": str(exc)}
+                else:
+                    # Trường hợp không có Content-Length (Transfer-Encoding: chunked) hoặc body rỗng (0 bytes)
+                    # Tuyệt đối không gọi await request.body() để chống OOM DoS từ chunked stream khổng lồ
+                    parsed_body = None
             elif content_length > 0:
                 parsed_body = {
                     "content_type": content_type,
@@ -217,35 +221,38 @@ class ComprehensiveAuditLogMiddleware(BaseHTTPMiddleware):
             status_code = response.status_code
             return response
         finally:
-            process_time_ms = round((time.perf_counter() - start_time) * 1000, 2)
-            user_id, user_name = extract_user_info_from_token(request)
+            # Bỏ qua không ghi audit log chung nếu request đã bị chặn bởi tầng Rate Limit (429)
+            # vì rate_limit.py đã chịu trách nhiệm ghi nhận SECURITY_RATE_LIMIT_EXCEEDED ở lần vi phạm đầu tiên
+            if status_code != 429:
+                process_time_ms = round((time.perf_counter() - start_time) * 1000, 2)
+                user_id, user_name = extract_user_info_from_token(request)
 
-            # Tạo action chuẩn: "METHOD /path" (giới hạn 100 ký tự theo cột DB)
-            action_name = f"{request.method} {request.url.path}"[:100]
+                # Tạo action chuẩn: "METHOD /path" (giới hạn 100 ký tự theo cột DB)
+                action_name = f"{request.method} {request.url.path}"[:100]
 
-            # Che giấu các tham số nhạy cảm trong query params (ví dụ ?token=..., ?otp=...)
-            masked_query_params = mask_sensitive_data(dict(request.query_params))
+                # Che giấu các tham số nhạy cảm trong query params (ví dụ ?token=..., ?otp=...)
+                masked_query_params = mask_sensitive_data(dict(request.query_params))
 
-            # Lấy correlation_id an toàn từ ContextVar hoặc request.state
-            cid = get_correlation_id(request)
+                # Lấy correlation_id an toàn từ ContextVar hoặc request.state
+                cid = get_correlation_id(request)
 
-            # Gom toàn bộ dữ liệu kiểm toán vào trường details JSON
-            audit_details: Dict[str, Any] = {
-                "user_name": user_name,
-                "method": request.method,
-                "path": request.url.path,
-                "query_params": masked_query_params,
-                "request_body": parsed_body,
-                "status_code": status_code,
-                "process_time_ms": process_time_ms,
-                "correlation_id": cid,
-            }
+                # Gom toàn bộ dữ liệu kiểm toán vào trường details JSON
+                audit_details: Dict[str, Any] = {
+                    "user_name": user_name,
+                    "method": request.method,
+                    "path": request.url.path,
+                    "query_params": masked_query_params,
+                    "request_body": parsed_body,
+                    "status_code": status_code,
+                    "process_time_ms": process_time_ms,
+                    "correlation_id": cid,
+                }
 
-            # Ghi vào bảng audit_logs qua background task bất đồng bộ (hoàn toàn không chặn luồng)
-            log_audit_background(
-                action=action_name,
-                user_id=user_id,
-                ip_address=client_ip,
-                user_agent=user_agent,
-                details=audit_details,
-            )
+                # Ghi vào bảng audit_logs qua background task bất đồng bộ (hoàn toàn không chặn luồng)
+                log_audit_background(
+                    action=action_name,
+                    user_id=user_id,
+                    ip_address=client_ip,
+                    user_agent=user_agent,
+                    details=audit_details,
+                )
